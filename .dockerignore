@@ -1,0 +1,8 @@
+.env
+.env.example
+.trend-history.json
+.git
+.gitignore
+__pycache__
+*.pyc
+.claude
