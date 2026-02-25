@@ -1,0 +1,21 @@
+name: Daily AI Trend Digest
+
+on:
+  schedule:
+    # 12:00 UTC every day
+    - cron: "0 12 * * *"
+  workflow_dispatch: # allow manual runs
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t ai-trend-finder .
+
+      - name: Run digest
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: docker run --rm -e SLACK_WEBHOOK_URL ai-trend-finder --slack
