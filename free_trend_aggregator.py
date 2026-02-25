@@ -550,6 +550,7 @@ async def summarize_with_ollama(items: list[TrendItem]) -> list[dict]:
     prompt = (
         "You are a tech news editor. For each item below, write exactly ONE short sentence "
         "(max 20 words) that explains why it matters to professionals using AI at work. "
+        "ALWAYS write in English, even if the title or context is in another language. "
         "Do NOT repeat the title. Focus on the practical implication or insight.\n\n"
         "Reply with ONLY a numbered list — one line per item, matching the numbers below. "
         "No bullet points, no extra commentary.\n\n"
