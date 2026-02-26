@@ -70,3 +70,7 @@ Running `--slack` twice on the same day skips the second post. Use `--fresh` to 
 | `--json` | Output structured JSON |
 | `--min-score N` | Minimum relevance score (default: 5.0) |
 | `--fresh` | Bypass cache and re-fetch/re-post |
+
+---
+
+<sub>Built by <a href="https://trailblaze.work"><strong>Trailblaze</strong></a> — we help companies deploy AI across their workforce. Strategy, implementation, training, and governance. <a href="mailto:hello@trailblaze.work">Get in touch</a>.</sub>
