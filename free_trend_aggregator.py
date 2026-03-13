@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import hashlib
 import json
 import os
@@ -111,19 +112,46 @@ def _today() -> str:
 
 
 def load_history() -> dict:
-    """Load history file. Returns dict with keys: date, cached_output, seen_keys."""
+    """Load history file. Returns dict with keys: date, cached_output, seen_stories.
+
+    seen_stories is a list of {"key": "md5hex", "title": "..."} dicts.
+    Migrates from old flat seen_keys format automatically.
+    """
     if HISTORY_FILE.exists():
         try:
-            return json.loads(HISTORY_FILE.read_text())
+            data = json.loads(HISTORY_FILE.read_text())
+            # Migrate old flat seen_keys list → seen_stories dicts
+            if "seen_keys" in data and "seen_stories" not in data:
+                data["seen_stories"] = [
+                    {"key": k, "title": ""} for k in data["seen_keys"]
+                ]
+                del data["seen_keys"]
+            return data
         except (json.JSONDecodeError, KeyError):
             pass
-    return {"date": "", "cached_output": "", "seen_keys": []}
+    return {"date": "", "cached_output": "", "seen_stories": []}
 
 
-def save_history(date: str, cached_output: str, new_keys: list[str], old_keys: list[str],
+def save_history(date: str, cached_output: str,
+                  new_stories: list[dict], old_stories: list[dict],
                   *, slack_posted: bool = False) -> None:
-    """Save today's output and accumulate seen keys."""
-    all_keys = list(set(old_keys + new_keys))
+    """Save today's output and accumulate seen stories.
+
+    Each story is {"key": "md5hex", "title": "..."}.
+    Caps history at ~14 days of stories (max 140 entries).
+    """
+    # Merge, dedup by key, keeping the entry that has a title
+    by_key: dict[str, dict] = {}
+    for s in old_stories + new_stories:
+        k = s["key"]
+        if k not in by_key or (not by_key[k].get("title") and s.get("title")):
+            by_key[k] = s
+    all_stories = list(by_key.values())
+
+    # Cap at 140 entries (keep newest — entries added last are newest)
+    if len(all_stories) > 140:
+        all_stories = all_stories[-140:]
+
     # Preserve existing slack_posted flag if already set today
     existing = load_history()
     if existing.get("date") == date and existing.get("slack_posted"):
@@ -131,7 +159,7 @@ def save_history(date: str, cached_output: str, new_keys: list[str], old_keys: l
     HISTORY_FILE.write_text(json.dumps({
         "date": date,
         "cached_output": cached_output,
-        "seen_keys": all_keys,
+        "seen_stories": all_stories,
         "slack_posted": slack_posted,
     }, ensure_ascii=False))
 
@@ -479,6 +507,26 @@ def deduplicate(items: list[TrendItem]) -> list[TrendItem]:
     return list(best.values())
 
 
+def _normalize_title(title: str) -> str:
+    """Lowercase, strip non-word chars for fuzzy comparison."""
+    return re.sub(r"\W+", " ", title.lower()).strip()
+
+
+def is_fuzzy_duplicate(title: str, seen_titles: list[str],
+                        threshold: float = 0.75) -> bool:
+    """Return True if *title* is a fuzzy match to any previously seen title."""
+    norm = _normalize_title(title)
+    if not norm:
+        return False
+    for seen in seen_titles:
+        seen_norm = _normalize_title(seen)
+        if not seen_norm:
+            continue
+        if difflib.SequenceMatcher(None, norm, seen_norm).ratio() >= threshold:
+            return True
+    return False
+
+
 def filter_ai_relevant(items: list[TrendItem], min_score: float = 5.0) -> list[TrendItem]:
     """Keep only items that pass a minimum relevance threshold."""
     return [it for it in items if it.score >= min_score]
@@ -771,11 +819,20 @@ async def main() -> None:
     relevant = filter_ai_relevant(all_items, min_score=args.min_score)
     print(f"  {len(relevant)} items above score threshold {args.min_score}.", file=sys.stderr)
 
-    # Filter out previously seen items (from prior days)
-    seen_keys = set(history.get("seen_keys", []))
-    if seen_keys:
+    # Filter out previously seen items (from prior days) — exact key OR fuzzy title
+    seen_stories = history.get("seen_stories", [])
+    seen_keys = {s["key"] for s in seen_stories}
+    seen_titles = [s["title"] for s in seen_stories if s.get("title")]
+    if seen_keys or seen_titles:
         before = len(relevant)
-        relevant = [it for it in relevant if it.dedup_key not in seen_keys]
+        fresh: list[TrendItem] = []
+        for it in relevant:
+            if it.dedup_key in seen_keys:
+                continue
+            if seen_titles and is_fuzzy_duplicate(it.title, seen_titles):
+                continue
+            fresh.append(it)
+        relevant = fresh
         filtered = before - len(relevant)
         if filtered:
             print(f"  {filtered} items filtered (already shown on previous days).", file=sys.stderr)
@@ -783,14 +840,14 @@ async def main() -> None:
     if not relevant:
         msg = "No new AI-at-work trends found since last run."
         print(msg)
-        save_history(today, msg, [], list(seen_keys))
+        save_history(today, msg, [], seen_stories)
         return
 
     # Sort globally by score
     relevant.sort(key=lambda x: -x.score)
 
-    # Collect dedup keys for items we're about to show
-    shown_keys = [it.dedup_key for it in relevant]
+    # Collect story dicts for items we're about to show
+    shown_stories = [{"key": it.dedup_key, "title": it.title} for it in relevant]
 
     # LLM digest mode
     if args.top > 0:
@@ -809,7 +866,7 @@ async def main() -> None:
             await post_to_slack(payload)
             # Also cache the terminal version
             output = format_digest(summarized)
-            save_history(today, output, shown_keys, list(seen_keys), slack_posted=True)
+            save_history(today, output, shown_stories, seen_stories, slack_posted=True)
             return
 
         if args.json_output:
@@ -818,7 +875,7 @@ async def main() -> None:
             output = format_digest(summarized)
 
         print(output)
-        save_history(today, output, shown_keys, list(seen_keys))
+        save_history(today, output, shown_stories, seen_stories)
         return
 
     # Group by source and sort within each group (highest score first)
@@ -833,7 +890,7 @@ async def main() -> None:
         output = format_markdown(items_by_source)
 
     print(output)
-    save_history(today, output, shown_keys, list(seen_keys))
+    save_history(today, output, shown_stories, seen_stories)
 
 
 if __name__ == "__main__":
