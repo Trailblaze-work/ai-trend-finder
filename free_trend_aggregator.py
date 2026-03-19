@@ -148,9 +148,9 @@ def save_history(date: str, cached_output: str,
             by_key[k] = s
     all_stories = list(by_key.values())
 
-    # Cap at 140 entries (keep newest — entries added last are newest)
-    if len(all_stories) > 140:
-        all_stories = all_stories[-140:]
+    # Cap at 10000 entries (keep newest — entries added last are newest)
+    if len(all_stories) > 10000:
+        all_stories = all_stories[-10000:]
 
     # Preserve existing slack_posted flag if already set today
     existing = load_history()
