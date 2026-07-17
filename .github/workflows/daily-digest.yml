@@ -1,9 +1,6 @@
 name: Daily AI Trend Digest
 
 on:
-  schedule:
-    # 12:00 UTC every day
-    - cron: "0 12 * * *"
   workflow_dispatch: # allow manual runs
 
 permissions:
